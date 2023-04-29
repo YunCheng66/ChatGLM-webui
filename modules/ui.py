@@ -3,7 +3,7 @@ import os
 import gradio as gr
 
 from modules import options
-from modules.context import ctx
+from modules.context import Context
 from modules.model import infer
 
 css = "style.css"
@@ -11,7 +11,7 @@ script_path = "scripts"
 _gradio_template_response_orig = gr.routes.templates.TemplateResponse
 
 
-def predict(query, max_length, top_p, temperature):
+def predict(ctx, query, max_length, top_p, temperature, use_stream_chat):
     ctx.limit_round()
     flag = True
     for _, output in infer(
@@ -19,7 +19,8 @@ def predict(query, max_length, top_p, temperature):
             history=ctx.history,
             max_length=max_length,
             top_p=top_p,
-            temperature=temperature
+            temperature=temperature,
+            use_stream_chat=use_stream_chat
     ):
         if flag:
             ctx.append(query, output)
@@ -31,12 +32,12 @@ def predict(query, max_length, top_p, temperature):
     yield ctx.rh, ""
 
 
-def clear_history():
+def clear_history(ctx):
     ctx.clear()
     return gr.update(value=[])
 
 
-def apply_max_round_click(max_round):
+def apply_max_round_click(ctx, max_round):
     ctx.max_rounds = max_round
     return f"Applied: max round {ctx.max_rounds}"
 
@@ -45,7 +46,8 @@ def create_ui():
     reload_javascript()
 
     with gr.Blocks(css=css, analytics_enabled=False) as chat_interface:
-        prompt = "输入你的内容..."
+        _ctx = Context()
+        state = gr.State(_ctx)
         with gr.Row():
             with gr.Column(scale=3):
                 gr.Markdown("""<h2><center>ChatGLM WebUI</center></h2>""")
@@ -58,13 +60,19 @@ def create_ui():
                             temperature = gr.Slider(minimum=0.01, maximum=1.0, step=0.01, label='Temperature', value=0.95)
 
                         with gr.Row():
-                            max_rounds = gr.Slider(minimum=1, maximum=100, step=1, label="最大对话轮数（调小可以显著改善爆显存，但是会丢失上下文）", value=20)
+                            max_rounds = gr.Slider(minimum=1, maximum=100, step=1, label="最大对话轮数", value=20)
                             apply_max_rounds = gr.Button("✔", elem_id="del-btn")
 
+                        cmd_output = gr.Textbox(label="Command Output")
+                        with gr.Row():
+                            use_stream_chat = gr.Checkbox(label='使用流式输出', value=True)
                 with gr.Row():
                     with gr.Column(variant="panel"):
                         with gr.Row():
-                            clear = gr.Button("清空对话（上下文）")
+                            clear_history_btn = gr.Button("清空对话")
+
+                        with gr.Row():
+                            sync_his_btn = gr.Button("同步对话")
 
                         with gr.Row():
                             save_his_btn = gr.Button("保存对话")
@@ -73,40 +81,37 @@ def create_ui():
                         with gr.Row():
                             save_md_btn = gr.Button("保存为 MarkDown")
 
-                with gr.Row():
-                    cmd_output = gr.Textbox(label="Command Output")
-
             with gr.Column(scale=7):
                 chatbot = gr.Chatbot(elem_id="chat-box", show_label=False).style(height=800)
                 with gr.Row():
-                    input_message = gr.Textbox(placeholder=prompt, show_label=False, lines=2, elem_id="chat-input")
+                    input_message = gr.Textbox(placeholder="输入你的内容...(按 Ctrl+Enter 发送)", show_label=False, lines=4, elem_id="chat-input").style(container=False)
                     clear_input = gr.Button("🗑️", elem_id="del-btn")
 
                 with gr.Row():
                     submit = gr.Button("发送", elem_id="c_generate")
 
+                with gr.Row():
+                    revoke_btn = gr.Button("撤回")
+
         submit.click(predict, inputs=[
+            state,
             input_message,
             max_length,
             top_p,
-            temperature
+            temperature,
+            use_stream_chat
         ], outputs=[
             chatbot,
             input_message
         ])
-
-        clear.click(clear_history, outputs=[chatbot])
+        revoke_btn.click(lambda ctx: ctx.revoke(), inputs=[state], outputs=[chatbot])
+        clear_history_btn.click(clear_history, inputs=[state], outputs=[chatbot])
         clear_input.click(lambda x: "", inputs=[input_message], outputs=[input_message])
-
-        save_his_btn.click(ctx.save_history, outputs=[cmd_output])
-        save_md_btn.click(ctx.save_as_md, outputs=[cmd_output])
-        load_his_btn.upload(ctx.load_history, inputs=[
-            load_his_btn,
-        ], outputs=[
-            chatbot
-        ])
-
-        apply_max_rounds.click(apply_max_round_click, inputs=[max_rounds], outputs=[cmd_output])
+        save_his_btn.click(lambda ctx: ctx.save_history(), inputs=[state], outputs=[cmd_output])
+        save_md_btn.click(lambda ctx: ctx.save_as_md(), inputs=[state], outputs=[cmd_output])
+        load_his_btn.upload(lambda ctx, f: ctx.load_history(f), inputs=[state, load_his_btn], outputs=[chatbot])
+        sync_his_btn.click(lambda ctx: ctx.rh, inputs=[state], outputs=[chatbot])
+        apply_max_rounds.click(apply_max_round_click, inputs=[state, max_rounds], outputs=[cmd_output])
 
     with gr.Blocks(css=css, analytics_enabled=False) as settings_interface:
         with gr.Row():

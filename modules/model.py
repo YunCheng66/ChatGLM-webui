@@ -1,5 +1,7 @@
 from typing import Optional, List, Tuple
 
+from torch.cuda import get_device_properties
+
 from modules.device import torch_gc
 from modules.options import cmd_opts
 
@@ -17,6 +19,23 @@ def prepare_model():
         else:
             model = model.float()
     else:
+        if cmd_opts.precision is None:
+            total_vram_in_gb = get_device_properties(0).total_memory / 1e9
+            print(f'GPU memory: {total_vram_in_gb:.2f} GB')
+
+            if total_vram_in_gb > 30:
+                cmd_opts.precision = 'fp32'
+            elif total_vram_in_gb > 13:
+                cmd_opts.precision = 'fp16'
+            elif total_vram_in_gb > 10:
+                cmd_opts.precision = 'int8'
+            else:
+                cmd_opts.precision = 'int4'
+
+            print(f'Choosing precision {cmd_opts.precision} according to your VRAM.'
+                  f' If you want to decide precision yourself,'
+                  f' please add argument --precision when launching the application.')
+
         if cmd_opts.precision == "fp16":
             model = model.half().cuda()
         elif cmd_opts.precision == "int4":
@@ -44,7 +63,7 @@ def load_model():
 
 def infer(query,
           history: Optional[List[Tuple]],
-          max_length, top_p, temperature):
+          max_length, top_p, temperature, use_stream_chat: bool):
     if cmd_opts.ui_dev:
         yield "hello", "hello, dev mode!"
         return
@@ -56,17 +75,29 @@ def infer(query,
         history = []
 
     output_pos = 0
-    try:
-        for output, history in model.stream_chat(
-                tokenizer, query=query, history=history,
-                max_length=max_length,
-                top_p=top_p,
-                temperature=temperature
-        ):
-            print(output[output_pos:], end='')
-            output_pos = len(output)
-            yield query, output
-    except Exception as e:
-        print(f"Generation failed: {repr(e)}")
-    print("")
+    if use_stream_chat:
+        try:
+            for output, history in model.stream_chat(
+                    tokenizer, query=query, history=history,
+                    max_length=max_length,
+                    top_p=top_p,
+                    temperature=temperature
+            ):
+                print(output[output_pos:], end='', flush=True)
+                output_pos = len(output)
+                yield query, output
+        except Exception as e:
+            print(f"Generation failed: {repr(e)}")
+    else:
+        output, history = model.chat(
+            tokenizer, query=query, history=history,
+            max_length=max_length,
+            top_p=top_p,
+            temperature=temperature
+        )
+
+        print(output)
+        yield query, output
+
+    print()
     torch_gc()

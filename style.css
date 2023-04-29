@@ -7,4 +7,17 @@
 
 .message {
     width: inherit !important;
+    padding-left: 20px !important;
+}
+
+.app {
+    max-width: 100% !important;
+}
+
+.math.inline > span {
+    display: none;
+}
+
+.math.inline > svg {
+    display: inline;
 }
